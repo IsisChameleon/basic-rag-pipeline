@@ -1,0 +1,21 @@
+name: basic-rag-pipeline-dev
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - api_venv:/workspace/.venv
+      - rag_data:/workspace/data
+    environment:
+      RAG_DATA_DIR: /workspace/data
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: sh -c "uv sync --frozen && uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  api_venv:
+  rag_data:

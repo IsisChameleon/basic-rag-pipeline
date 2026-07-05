@@ -47,14 +47,23 @@ index; `/ingest` is the write path. Grouped as two routers, not three:
 
 ## Endpoints (stubs only)
 
-- `GET /health` → `{"status": "ok"}`
-- `POST /ingest` — body `{"url": str}` → `{"status": "not_implemented"}`
-- `POST /search` — body `{"query": str}` → `{"results": []}`
-- `POST /answer` — body `{"query": str}` → `{"answer": "", "citations": []}`
+Request and response bodies are typed with pydantic `BaseModel` classes
+(not bare dicts), matching readme's `api/routers/start.py` pattern
+(`StartSessionRequest` / `StartSessionResponse`):
 
-Request bodies are intentionally minimal (just the one field each endpoint
-obviously needs) so the contract isn't over-specified before the real
-implementation design happens.
+- `GET /health` → `{"status": "ok"}` (unchanged, untyped — matches readme's
+  own `/health`)
+- `POST /ingest` — `IngestRequest(url: str)` →
+  `IngestResponse(status: str)`, stub returns `status="not_implemented"`
+- `POST /search` — `SearchRequest(query: str)` →
+  `SearchResponse(results: list)`, stub returns `results=[]`
+- `POST /answer` — `AnswerRequest(query: str)` →
+  `AnswerResponse(answer: str, citations: list)`, stub returns
+  `answer="", citations=[]`
+
+Request/response models are intentionally minimal (just the one field each
+endpoint obviously needs) so the contract isn't over-specified before the
+real implementation design happens.
 
 ## Error handling
 
@@ -82,8 +91,13 @@ These were raised during design discussion and deliberately deferred, not
 decided:
 
 - Vector store backend (embedded Chroma vs. Postgres/pgvector vs. other)
-- Embedding + LLM provider (Anthropic/OpenAI/Google)
+- LLM provider for `/answer` (Anthropic/OpenAI/Google)
 - Ingestion scope (single page vs. same-domain crawl)
 - `pydantic-settings`-style layered config (nothing to configure yet)
 
-They will be revisited when the actual RAG logic is designed.
+Embedding/reranking models are decided (recorded in `build_log.md`) but
+**not implemented**: `BAAI/bge-small-en-v1.5` (bi-encoder, retrieval) +
+`cross-encoder/ms-marco-MiniLM-L-6-v2` (reranker), both local
+sentence-transformers-compatible models.
+
+These will be revisited/implemented when the actual RAG logic is designed.

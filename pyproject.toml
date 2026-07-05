@@ -1,0 +1,49 @@
+[project]
+name = "basic-rag-pipeline"
+version = "0.1.0"
+description = "Basic RAG pipeline API"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "loguru>=0.7.3",
+    "pydantic>=2.0.0",
+    "httpx>=0.28.0",
+    "trafilatura>=2.1.0",
+    "chromadb>=1.5.0",
+    "sentence-transformers>=5.0.0",
+    # Direct dependency (not just transitive via sentence-transformers) so
+    # [tool.uv.sources]/[tool.uv.index] below actually takes effect -- uv
+    # 0.11.26 only honors a source override for a package listed here, not
+    # for one pulled in purely transitively (verified empirically).
+    "torch",
+]
+
+[dependency-groups]
+dev = [
+    "ruff~=0.15.18",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.23.0",
+]
+
+# sentence-transformers pulls in torch; the default PyPI wheel drags along
+# ~2GB of nvidia-cu* CUDA libraries even on a machine with no GPU (or, as
+# here, a GPU whose driver is too old for that CUDA build to use anyway).
+# Point torch at the CPU-only wheel index instead -- same API, no CUDA deps.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+[tool.ruff.lint]
+select = ["I"]
