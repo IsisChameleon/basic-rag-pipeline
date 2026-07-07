@@ -14,7 +14,10 @@ storage/retrieval code has been written yet.
 
 1. **Discover** — `sitemap.xml` → list of page URLs
 2. **Fetch** — httpx
-3. **Extract** — Trafilatura → clean Markdown per page
+3. **Extract** — readability-lxml (isolate the article) → markdownify
+   (HTML → Markdown, preserving heading structure) per page. (Originally
+   Trafilatura, swapped 2026-07-07 because it dropped nearly all real
+   headings — see build_log.md.)
 4. **Chunk** — split Markdown on structural boundaries (headings, atomic
    tables/lists — never split a table or list mid-way)
 5. **Store chunks** — SQLite (`chunks` table: source of truth for chunk

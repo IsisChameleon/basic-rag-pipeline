@@ -268,12 +268,86 @@ fast unit suite. `uv run pytest` — 10 passed.
 - `docker compose up --build` — built, started, and answered `GET /health` with `{"status":"ok"}`
   from inside the container.
 
-**Known limitation found during the real end-to-end run, not fixed:** Trafilatura occasionally
-leaks a short non-article snippet into the extracted Markdown as a heading — on
-`contextual-retrieval`, a "## Get the developer newsletter" CTA blurb appears before the real
-content. Since our chunker attributes everything up to the *next* heading to whatever heading
-came before it, this mislabels `heading_path` for the first chunk(s) of an affected page (the
-retrieved chunk *text* itself is unaffected and was verified correct in the query above — only the
-heading-path metadata is wrong). Not fixed: a targeted fix would mean pruning specific boilerplate
-patterns, which cuts against keeping ingestion generic across arbitrary doc sites rather than
-tuned to Anthropic's site specifically. Left as a documented caveat.
+**Known limitation found during the real end-to-end run (CORRECTED 2026-07-07 — see below):**
+This note originally claimed Trafilatura only "mislabels `heading_path` for the first chunk(s) of
+an affected page." **That was wrong — an unverified assertion.** On later inspection Trafilatura
+drops *nearly every* real heading (demotes it to a paragraph) and keeps only a "## Get the
+developer newsletter" CTA blurb, so on 4 of 5 test pages the CTA was the *only* heading in the
+extracted Markdown and every chunk inherited `heading_path = "Get the developer newsletter"`. The
+feature was ~100% broken on this site, not cosmetically off. Root-caused and fixed in the
+2026-07-07 extractor-swap section below.
+
+## 2026-07-07 — PR review pass, then `/ingest` request-timeout fix
+
+Addressed 9 self-review comments left on PR #1 (documentation/reference gaps, an
+unhandled-fetch-exception behavior gap, chunk metadata duplication, an unnecessary import alias) —
+see the PR for detail; not repeated here since none changed the architecture.
+
+**Real gap found afterwards: `/ingest` blocked the HTTP response for the entire batch.** The
+sync-`def` decision recorded above (`/ingest`, `/search`, `/answer` are sync `def`) was made purely
+so a long `/ingest` call doesn't block the shared event loop for *other* concurrent requests. It
+was never about the separate problem that the `/ingest` request itself stayed open for the full
+duration of discover→fetch→extract→chunk→embed→store across a whole sitemap section (dozens of
+pages) — the client's HTTP connection sat open the whole time, with no uvicorn-level timeout
+configured and no visibility into partial progress if a proxy or client library's own default
+timeout (commonly 30-60s) fired first.
+
+**Fix: accept-and-poll pattern.**
+- `POST /ingest` now returns `202 Accepted` immediately with a `job_id`, and hands the actual
+  ingestion off to a FastAPI `BackgroundTasks` callback
+  (https://fastapi.tiangolo.com/tutorial/background-tasks/) that runs after the response is sent.
+- `GET /ingest/{job_id}` polls status (`pending` / `completed` / `failed`) and, once completed,
+  returns the same `pages_discovered`/`pages_ingested`/`chunks_stored` counts the old synchronous
+  response used to return directly.
+- Job state lives in a new `rag/jobs.py`, an in-memory `dict` guarded by a `threading.Lock` (the
+  background task runs on FastAPI's worker thread pool, not the event loop, so concurrent access is
+  a real possibility). **Deliberately not durable**: job state is lost on process restart and isn't
+  shared across multiple worker processes. This is the tradeoff for staying infra-free (no
+  Redis/queue) at this project's current scope; revisit with a real task queue (RQ/Celery) if this
+  ever needs to survive restarts or scale past one process.
+- Verified (not assumed): `TestClient` runs `BackgroundTasks` to completion synchronously within
+  the same ASGI call before `.post()` returns, so `tests/api/routers/test_ingest.py` can poll the
+  job status immediately afterward and get a deterministic `"completed"`/`"failed"` result — no
+  `sleep`/retry loop needed in the test.
+
+## 2026-07-07 — Extractor swap: Trafilatura → readability-lxml + markdownify
+
+**Why.** The `heading_path` metadata was garbage (see the corrected note above): every chunk on
+most pages read `"Get the developer newsletter"`. Root cause, verified three independent ways
+against the saved `temp/*.html`:
+1. Trafilatura's Markdown output contained exactly **one** heading — the newsletter CTA — despite
+   the raw HTML having 20-30 real `<h1>`-`<h3>` headings per page.
+2. Trafilatura's own XML output tagged only that one element as `<head>`; real headings like
+   "Further boosting performance with Reranking" came out as plain `<p>`.
+3. No Trafilatura option recovered them (`include_formatting`, `favor_recall`, both combined —
+   still one heading).
+
+So Trafilatura's *content-extraction* step (not the Markdown conversion) was demoting headings.
+That's a design mismatch: we were relying on it to carry heading structure and it doesn't for this
+site.
+
+**Fix — split extraction from conversion.** The canonical 2026 pattern for HTML→Markdown that
+preserves structure is: isolate the main article with a readability-style extractor, then convert
+that HTML fragment with a faithful Markdown converter.
+- `readability-lxml` (`Document(html).summary()`) isolates the article, dropping nav/footer/CTA
+  boilerplate while keeping the heading DOM intact.
+- `markdownify(..., heading_style="ATX")` converts it to Markdown, preserving the full heading
+  hierarchy, tables, and fenced code blocks.
+- Title from `Document.short_title()`, stripping a trailing " \ Anthropic" / " | Site" suffix.
+
+**Empirically verified across all 5 saved pages** (headings recovered / CTA junk gone / tables /
+code): building-effective-agents 18/✓/–/–, contextual-retrieval 15/✓/–/✓, demystifying-evals
+19/✓/✓/✓, multi-agent-research 8/✓/–/–, swe-bench-sonnet 10/✓/✓/✓. End-to-end on
+contextual-retrieval, `heading_path` now shows the real nested structure, e.g.
+`"Further boosting performance with Reranking > Performance improvements > Cost and latency
+considerations"`, with only the pre-heading intro chunk left (honestly) empty.
+
+- Dependencies: removed `trafilatura`; added `readability-lxml`, `markdownify`, and
+  `lxml-html-clean` (readability needs `lxml.html.clean`, split into its own package in lxml 5+).
+- Added `tests/rag/test_extract.py` — a fixture-based regression guard (no network, no mocks) that
+  asserts real `<h2>`/`<h3>` headings survive as ATX Markdown and the site-name title suffix is
+  stripped. This is the test that would have caught the original bug.
+- Unchanged pre-existing tradeoff: tables/code blocks stay atomic (never split), so a table larger
+  than the embedder's 512-token limit is truncated on encode (observed a 528-token table). Not
+  addressed here — it's the existing "keep structured blocks whole" decision, independent of the
+  extractor swap.
