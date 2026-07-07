@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from rag.answer_service import generate_answer
 from rag.search_service import hybrid_search
 
 router = APIRouter(tags=["query"])
@@ -68,9 +69,11 @@ def search(request: SearchRequest) -> SearchResponse:
 
 @router.post("/answer", response_model=AnswerResponse)
 def answer(request: AnswerRequest) -> AnswerResponse:
-    # Retrieval is fully implemented; the LLM provider for answer generation
-    # is still an open decision (see build_log.md), so `answer` stays empty
-    # for now while `citations` reflects real retrieval results.
-    results = hybrid_search(request.query, top_k=5)
-    citations = [Citation(url=r.url, title=r.title, heading_path=r.heading_path) for r in results]
-    return AnswerResponse(answer="", citations=citations)
+    # Full RAG: retrieve the query's most relevant chunks, then have Gemini
+    # generate an answer that cites them with [n] references. `citations` is
+    # in reference order -- citation [n] in `answer` is the n-th entry.
+    result = generate_answer(request.query, top_k=5)
+    citations = [
+        Citation(url=s.url, title=s.title, heading_path=s.heading_path) for s in result.sources
+    ]
+    return AnswerResponse(answer=result.answer, citations=citations)

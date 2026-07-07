@@ -351,3 +351,37 @@ considerations"`, with only the pre-heading intro chunk left (honestly) empty.
   than the embedder's 512-token limit is truncated on encode (observed a 528-token table). Not
   addressed here — it's the existing "keep structured blocks whole" decision, independent of the
   extractor swap.
+
+## 2026-07-07 — `/answer` generation implemented with Gemini (gemini-2.5-flash)
+
+The last deferred decision — the LLM provider for `/answer` — is now made:
+**Gemini `gemini-2.5-flash`**, the same model the `~/src/readme` book pipeline uses.
+Followed readme's core pattern (`google.genai` `Client`, `generate_content`,
+`temperature=0.0`, `thinking_config=ThinkingConfig(thinking_budget=0)`) but deliberately
+*not* its heavyweight batch machinery (per-job `GeminiJobContext`, `UsageTracker`,
+tenacity retry classification, concurrency semaphores) — that exists to process thousands
+of chunks per book; a single `/answer` call needs one plain call. Used the **sync** client
+(`client.models.generate_content`), not readme's `client.aio.*`, to stay consistent with
+this repo's all-sync-`def` handlers running in FastAPI's thread pool.
+
+**RAG flow** (`rag/answer_service.py`): embed + retrieve the query's top-k chunks via the
+existing `hybrid_search` → format them as numbered sources `[1] Title > heading_path (url)\n
+text` → send to Gemini with a system instruction to answer using only those sources and cite
+claims with bracketed `[n]` numbers *like a scientific paper*, saying so plainly when the
+sources don't cover the question. Returns the generated answer plus the sources **in citation
+order** — `sources[0]` is reference `[1]` — which the router maps to the `citations` list. If
+retrieval returns nothing, it skips the LLM entirely and returns an honest "no relevant
+sources" message.
+
+- Dependency added: `google-genai>=1.63.0`.
+- Config: `GOOGLE_API_KEY` (from the local `.env`) + `LLM_MODEL` in `rag/config.py`; wired
+  through `docker-compose.yaml` and documented in `.env.example`. Credential isolation kept:
+  the key comes only from this repo's own `.env`, never from readme. A missing key raises a
+  clear `RuntimeError` (verified) rather than a cryptic SDK error.
+- Tests (`tests/rag/test_answer_service.py`, updated `tests/api/routers/test_query.py`): mock
+  the two real external boundaries — the Gemini client (network) and `hybrid_search`
+  (retrieval, which needs models + ingested data) — and assert the numbered-sources prompt,
+  the citation ordering, and that an empty retrieval skips the LLM. 17 tests pass, ruff clean.
+- **Not yet run against the live Gemini API**: this repo has no `GOOGLE_API_KEY` configured
+  and borrowing one from another repo is disallowed. Real end-to-end generation is pending the
+  user supplying a key in `.env`.

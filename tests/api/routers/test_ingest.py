@@ -6,13 +6,13 @@ from rag.ingest_service import IngestSummary
 
 
 def test_ingest_returns_202_and_job_completes_in_background(monkeypatch) -> None:
-    async def fake_ingest_section(url: str) -> IngestSummary:
+    async def fake_ingest(url: str) -> IngestSummary:
         assert url == "https://example.com/docs"
         return IngestSummary(pages_discovered=3, pages_ingested=3, chunks_stored=12)
 
     # Patched where the name is used (ingest_router_module), not where it's
     # defined (rag.ingest_service) -- see memory note on mock.patch targets.
-    monkeypatch.setattr(ingest_router_module, "ingest_section", fake_ingest_section)
+    monkeypatch.setattr(ingest_router_module, "ingest_page_with_url", fake_ingest)
 
     client = TestClient(app)
     response = client.post("/ingest", json={"url": "https://example.com/docs"})
@@ -38,10 +38,10 @@ def test_ingest_returns_202_and_job_completes_in_background(monkeypatch) -> None
 
 
 def test_ingest_job_failure_is_reported_via_status(monkeypatch) -> None:
-    async def failing_ingest_section(url: str) -> IngestSummary:
+    async def failing_ingest(url: str) -> IngestSummary:
         raise ValueError("boom")
 
-    monkeypatch.setattr(ingest_router_module, "ingest_section", failing_ingest_section)
+    monkeypatch.setattr(ingest_router_module, "ingest_page_with_url", failing_ingest)
 
     client = TestClient(app)
     response = client.post("/ingest", json={"url": "https://example.com/docs"})

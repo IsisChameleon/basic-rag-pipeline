@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from rag import jobs
-from rag.ingest_service import ingest_section
+from rag.ingest_service import ingest_page_with_url
 
 router = APIRouter(tags=["ingest"])
 
@@ -39,7 +39,7 @@ def _run_ingest_job(job_id: str, url: str) -> None:
     request/response cycle.
     """
     try:
-        summary = asyncio.run(ingest_section(url))
+        summary = asyncio.run(ingest_page_with_url(url))
         jobs.mark_completed(job_id, summary)
     except Exception as exc:
         jobs.mark_failed(job_id, str(exc))

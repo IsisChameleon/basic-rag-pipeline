@@ -18,6 +18,9 @@ services:
       # file (HF_TOKEN=hf_...) -- docker compose loads .env automatically,
       # and it's gitignored so it's never committed.
       HF_TOKEN: ${HF_TOKEN:-}
+      # Required by /answer to call Gemini for answer generation. Put it in a
+      # local .env file (GOOGLE_API_KEY=...), which is gitignored.
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     ports:
       - "${API_PORT:-8000}:8000"
     command: sh -c "uv sync --frozen && uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"

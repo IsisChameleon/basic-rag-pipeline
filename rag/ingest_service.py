@@ -17,7 +17,7 @@ class IngestSummary:
     chunks_stored: int
 
 
-async def ingest_section(section_url: str) -> IngestSummary:
+async def ingest_page_with_url(section_url: str) -> IngestSummary:
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         urls = await discover.discover_section_urls(client, section_url)
         htmls = await fetch.fetch_many(client, urls)
