@@ -40,7 +40,7 @@ def test_generate_answer_passes_numbered_sources_and_returns_them_in_order(monke
 
     monkeypatch.setattr(answer_service, "hybrid_search", lambda query, top_k=5: _sources())
     monkeypatch.setattr(
-        answer_service, "get_client", lambda: SimpleNamespace(models=FakeModels())
+        answer_service, "get_client_gemini", lambda: SimpleNamespace(models=FakeModels())
     )
 
     result = answer_service.generate_answer("How does contextual retrieval help?")
@@ -62,7 +62,7 @@ def test_generate_answer_skips_llm_when_no_sources(monkeypatch) -> None:
         raise AssertionError("Gemini must not be called when retrieval is empty")
 
     monkeypatch.setattr(answer_service, "hybrid_search", lambda query, top_k=5: [])
-    monkeypatch.setattr(answer_service, "get_client", _fail)
+    monkeypatch.setattr(answer_service, "get_client_gemini", _fail)
 
     result = answer_service.generate_answer("nothing matches this")
 
