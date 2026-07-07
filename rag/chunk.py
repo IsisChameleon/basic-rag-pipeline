@@ -9,10 +9,10 @@ _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _CODE_FENCE_RE = re.compile(r"^\s*```")
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-# 350 tokens leaves comfortable headroom under bge-small-en-v1.5's 512-token
-# max_seq_length (see rag/embeddings.py) -- the aioutlooks article's 500-900
-# figure is for LLM context windows in general, not this embedding model's
-# hard limit.
+# Chunk size is tied to the embedding model's token limit, not a fixed
+# constant: 350 leaves comfortable headroom under bge-small-en-v1.5's
+# 512-token max_seq_length (see rag/embeddings.py). Revisit this value if the
+# embedding model changes.
 DEFAULT_TARGET_TOKENS = 350
 DEFAULT_OVERLAP_TOKENS = 50
 

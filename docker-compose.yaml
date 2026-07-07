@@ -12,6 +12,12 @@ services:
       - rag_data:/workspace/data
     environment:
       RAG_DATA_DIR: /workspace/data
+      # Optional: raises the Hugging Face Hub rate limit for downloading the
+      # embedding/reranker models. Get a free "Read" token at
+      # https://huggingface.co/settings/tokens and put it in a local .env
+      # file (HF_TOKEN=hf_...) -- docker compose loads .env automatically,
+      # and it's gitignored so it's never committed.
+      HF_TOKEN: ${HF_TOKEN:-}
     ports:
       - "${API_PORT:-8000}:8000"
     command: sh -c "uv sync --frozen && uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"

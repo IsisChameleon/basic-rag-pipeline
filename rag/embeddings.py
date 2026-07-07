@@ -6,9 +6,10 @@ _BI_ENCODER_NAME = "BAAI/bge-small-en-v1.5"
 _CROSS_ENCODER_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 # BGE's asymmetric-retrieval convention: prepend this instruction to queries,
-# not to documents. This ST-hub build of the model ships empty `.prompts`
-# (verified empirically), so it isn't applied automatically -- has to be done
-# by hand per the model card.
+# not to documents, per the model card's "Usage" section --
+# https://huggingface.co/BAAI/bge-small-en-v1.5#usage. This ST-hub build of
+# the model ships empty `.prompts` (verified empirically), so it isn't
+# applied automatically -- has to be done by hand.
 _QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 _bi_encoder: SentenceTransformer | None = None

@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 from rag.config import DB_PATH
+
+
+@dataclass
+class ChunkMetadata:
+    """The fields describing a chunk that must stay identical wherever a
+    chunk is stored (SQLite `chunks` table and the Chroma vector metadata) --
+    a single source of truth instead of two hand-written copies drifting
+    apart."""
+
+    url: str
+    title: str
+    heading_path: str
+    chunk_index: int
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
@@ -54,10 +68,7 @@ def delete_chunks_for_url(conn: sqlite3.Connection, url: str) -> None:
 def insert_chunk(
     conn: sqlite3.Connection,
     *,
-    url: str,
-    title: str,
-    heading_path: str,
-    chunk_index: int,
+    metadata: ChunkMetadata,
     text: str,
     content_hash: str,
     fetched_at: str,
@@ -67,7 +78,15 @@ def insert_chunk(
         INSERT INTO chunks (url, title, heading_path, chunk_index, text, content_hash, fetched_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (url, title, heading_path, chunk_index, text, content_hash, fetched_at),
+        (
+            metadata.url,
+            metadata.title,
+            metadata.heading_path,
+            metadata.chunk_index,
+            text,
+            content_hash,
+            fetched_at,
+        ),
     )
     return cursor.lastrowid
 

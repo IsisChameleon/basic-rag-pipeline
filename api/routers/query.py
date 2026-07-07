@@ -14,11 +14,14 @@ class SearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
-    text: str
-    url: str
-    title: str
-    heading_path: str
-    score: float
+    text: str  # the chunk's content, e.g. "Contextual Retrieval reduces..."
+    url: str  # the source page, e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
+    title: str  # the source page's title, e.g. "Introducing Contextual Retrieval"
+    heading_path: str  # the chunk's position in the page's heading structure,
+    # e.g. "Introducing Contextual Retrieval > Implementation" for a chunk
+    # nested under an "Implementation" subheading; top-level chunks have no
+    # " > " separator, e.g. just "Introducing Contextual Retrieval"
+    score: float  # rerank score (cross-encoder), higher is more relevant
 
 
 class SearchResponse(BaseModel):
@@ -30,9 +33,9 @@ class AnswerRequest(BaseModel):
 
 
 class Citation(BaseModel):
-    url: str
-    title: str
-    heading_path: str
+    url: str  # e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
+    title: str  # e.g. "Introducing Contextual Retrieval"
+    heading_path: str  # e.g. "Introducing Contextual Retrieval > Implementation"
 
 
 class AnswerResponse(BaseModel):

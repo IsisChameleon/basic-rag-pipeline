@@ -32,6 +32,7 @@ def ingest(request: IngestRequest) -> IngestResponse:
     mixes async network fetches with CPU-bound work (trafilatura extraction,
     embedding, SQLite/Chroma writes) -- running that inline on the event loop
     would stall every other in-flight request for the duration.
+    Reference: https://fastapi.tiangolo.com/async/#path-operation-functions
     """
     summary = asyncio.run(ingest_section(request.url))
     return IngestResponse(
