@@ -452,3 +452,22 @@ error).
   its chunk, and operator/punctuation/empty queries don't raise. 19 tests pass.
 - Verified in the running container: `POST /search {"query":"what is contextual
   retrieval?"}` now returns results instead of a 500.
+
+## 2026-07-07 — Persist the HuggingFace model cache across container recreates
+
+**Symptom:** the embedding/reranker weights appeared to reload every time Docker
+started. Traced it: sentence-transformers caches downloaded weights at
+`/root/.cache/huggingface/hub` (129MB bge-small + ~90MB cross-encoder), but that
+path was on the container's ephemeral writable layer -- only `/workspace`,
+`.venv`, and `data` were volumes. So every `docker compose up --force-recreate`
+/ rebuild wiped the cache and re-downloaded ~220MB (measured: 49s cold load).
+
+**Fix:** added a named volume `hf_cache` mounted at `/root/.cache/huggingface`,
+with `HF_HOME` pinned to that path (so it holds regardless of the image's HOME).
+Verified: after warming the cache once, a `--force-recreate` keeps all 217MB, and
+a subsequent load with `HF_HUB_OFFLINE=1` (zero network) completes in 5.3s.
+
+Note on the "Loading weights" progress bar: that ~5s is the in-RAM load (weights
+read from disk into memory), which happens on every worker process start and is
+inherent -- uvicorn `--reload` re-loads on code changes. The volume eliminates
+the expensive *re-download* (~44s), not the in-RAM load.

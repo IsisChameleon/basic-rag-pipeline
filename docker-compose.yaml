@@ -10,8 +10,15 @@ services:
       - .:/workspace
       - api_venv:/workspace/.venv
       - rag_data:/workspace/data
+      # Persist the downloaded embedding/reranker weights across container
+      # recreates so they aren't re-downloaded (~220MB) every time -- the HF
+      # cache otherwise lives on the container's ephemeral writable layer.
+      - hf_cache:/root/.cache/huggingface
     environment:
       RAG_DATA_DIR: /workspace/data
+      # Pin the HF cache to the path backed by the hf_cache volume above,
+      # regardless of the image's default HOME.
+      HF_HOME: /root/.cache/huggingface
       # Optional: raises the Hugging Face Hub rate limit for downloading the
       # embedding/reranker models. Get a free "Read" token at
       # https://huggingface.co/settings/tokens and put it in a local .env
@@ -28,3 +35,4 @@ services:
 volumes:
   api_venv:
   rag_data:
+  hf_cache:
