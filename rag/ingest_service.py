@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 import httpx
+from loguru import logger
 
 from rag import chunk, discover, embeddings, extract, fetch, store, vectorstore
 from rag.store import ChunkMetadata
@@ -18,9 +19,15 @@ class IngestSummary:
 
 
 async def ingest_page_with_url(section_url: str) -> IngestSummary:
+    logger.info("Starting ingest for {}", section_url)
+    urls = await discover.discover_section_urls(section_url)
+    if not urls:
+        logger.warning("Nothing to ingest for {} -- no pages discovered", section_url)
+        return IngestSummary(pages_discovered=0, pages_ingested=0, chunks_stored=0)
+
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        urls = await discover.discover_section_urls(client, section_url)
         htmls = await fetch.fetch_many(client, urls)
+    logger.info("Fetched {} page(s); extracting and chunking", sum(h is not None for h in htmls))
 
     conn = store.get_connection()
     pages_ingested = 0
@@ -32,10 +39,12 @@ async def ingest_page_with_url(section_url: str) -> IngestSummary:
 
         page = extract.extract_page(html, url)
         if page is None:
+            logger.debug("Skipping {} -- no extractable content", url)
             continue
 
         chunks = chunk.chunk_markdown(page.markdown, count_tokens=embeddings.count_tokens)
         if not chunks:
+            logger.debug("Skipping {} -- produced no chunks", url)
             continue
 
         store.delete_chunks_for_url(conn, url)
@@ -73,6 +82,13 @@ async def ingest_page_with_url(section_url: str) -> IngestSummary:
 
     conn.commit()
     conn.close()
+    logger.info(
+        "Ingest complete for {}: {}/{} pages ingested, {} chunks stored",
+        section_url,
+        pages_ingested,
+        len(urls),
+        chunks_stored,
+    )
     return IngestSummary(
         pages_discovered=len(urls),
         pages_ingested=pages_ingested,

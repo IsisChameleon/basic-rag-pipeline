@@ -10,6 +10,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pydantic>=2.0.0",
     "httpx>=0.28.0",
+    "ultimate-sitemap-parser>=1.4.0",
     "readability-lxml>=0.8.4.1",
     "markdownify>=1.2.0",
     "lxml-html-clean>=0.4.0",

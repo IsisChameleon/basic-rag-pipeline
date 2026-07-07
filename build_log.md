@@ -385,3 +385,42 @@ sources" message.
 - **Not yet run against the live Gemini API**: this repo has no `GOOGLE_API_KEY` configured
   and borrowing one from another repo is disallowed. Real end-to-end generation is pending the
   user supplying a key in `.env`.
+
+## 2026-07-07 — Sitemap-index bug fix, sitemap library swap, and logging
+
+**Bug:** ingesting `https://langfuse.com/docs` returned no error but ingested
+nothing. Root cause: langfuse's `/sitemap.xml` is a **sitemap index**
+(`<sitemapindex>` pointing at child sitemaps), not a flat `<urlset>`. The
+hand-rolled parser only looked for `<url>` elements, found zero, and returned
+an empty list — so discovery silently yielded nothing. Verified by fetching the
+sitemap directly (186 bytes, one `<sitemap><loc>` child) and its child
+(`sitemap-0.xml`, a `urlset` with 777 URLs, 104 under `/docs`).
+
+**Fix — use a real sitemap library instead of hand-rolling.** Rather than grow
+our own parser to cover indexes (and then gzip, robots.txt-declared sitemaps,
+plain-text sitemaps, nesting...), switched `rag/discover.py` to
+`ultimate-sitemap-parser` (usp). Verified against the live langfuse site: 777
+URLs, 104 under `/docs`, matching the manual dig. usp does its own synchronous
+HTTP + sitemap discovery from the homepage, so `discover_section_urls` no longer
+takes an httpx client and runs usp via `asyncio.to_thread` to keep it off the
+event loop. `discover_section_urls(section_url)` is the new signature; we keep
+only the path-prefix filtering and logging.
+
+**Logging (loguru).** Added logging across the ingest path so a silent-zero is
+never silent again: discovery logs the sitemap, total URLs, and how many match
+the prefix (with a WARNING when zero); ingest logs start, fetched count,
+per-page skips (DEBUG: no content / no chunks), and a final
+`N/M pages, K chunks` summary. Added `core/logging_config.py` with
+`configure_logging()` (called from `api/main.py`) that removes loguru's implicit
+default handler and installs a stderr sink at `LOG_LEVEL` (default **DEBUG**, so
+the per-page skip logs are actually emitted; override with `LOG_LEVEL=INFO` in
+production). Matches readme's `configure_logging()` convention. Lives in a new
+`core/` package (cross-cutting infra used by both `api/` and `rag/`), not under
+the RAG domain package.
+
+- Dependency added: `ultimate-sitemap-parser>=1.4.0`.
+- Test rewrite: `tests/rag/test_discover.py` now mocks usp's
+  `sitemap_tree_for_homepage` (the library boundary usp fetches through) and
+  asserts our prefix filtering + the empty-match case. 18 tests pass, ruff clean.
+- Verified end-to-end: `discover_section_urls("https://langfuse.com/docs")` now
+  returns 104 URLs with DEBUG logging active.

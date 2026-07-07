@@ -1,28 +1,48 @@
-import httpx
+from types import SimpleNamespace
 
-from rag.discover import discover_section_urls
-
-_SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-<url><loc>https://example.com/</loc></url>
-<url><loc>https://example.com/docs</loc></url>
-<url><loc>https://example.com/docs/page-1</loc></url>
-<url><loc>https://example.com/docs/page-2</loc></url>
-<url><loc>https://example.com/careers</loc></url>
-</urlset>"""
+from rag import discover
 
 
-async def test_discover_filters_by_path_prefix() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/sitemap.xml"
-        return httpx.Response(200, text=_SITEMAP_XML)
+def _fake_tree(urls: list[str]):
+    pages = [SimpleNamespace(url=u) for u in urls]
+    return SimpleNamespace(all_pages=lambda: iter(pages))
 
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as client:
-        urls = await discover_section_urls(client, "https://example.com/docs")
 
+async def test_discover_filters_by_path_prefix(monkeypatch) -> None:
+    # usp does its own HTTP + sitemap discovery -- mock that library boundary
+    # (patched where it's used) and test our prefix filtering. usp itself is
+    # what handles sitemap-index/gzip/robots.txt, verified against a live site.
+    all_urls = [
+        "https://example.com/",
+        "https://example.com/docs",
+        "https://example.com/docs/page-1",
+        "https://example.com/docs/page-2",
+        "https://example.com/careers",
+    ]
+
+    captured = {}
+
+    def fake_tree_for_homepage(homepage: str):
+        captured["homepage"] = homepage
+        return _fake_tree(all_urls)
+
+    monkeypatch.setattr(discover, "sitemap_tree_for_homepage", fake_tree_for_homepage)
+
+    urls = await discover.discover_section_urls("https://example.com/docs")
+
+    assert captured["homepage"] == "https://example.com/"
     assert urls == [
         "https://example.com/docs",
         "https://example.com/docs/page-1",
         "https://example.com/docs/page-2",
     ]
+
+
+async def test_discover_returns_empty_when_no_match(monkeypatch) -> None:
+    monkeypatch.setattr(
+        discover,
+        "sitemap_tree_for_homepage",
+        lambda homepage: _fake_tree(["https://example.com/", "https://example.com/blog"]),
+    )
+    urls = await discover.discover_section_urls("https://example.com/docs")
+    assert urls == []

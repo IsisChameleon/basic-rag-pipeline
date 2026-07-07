@@ -1,31 +1,42 @@
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
+import asyncio
 from urllib.parse import urlparse
 
-import httpx
+from loguru import logger
+from usp.tree import sitemap_tree_for_homepage
 
-_SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
+async def discover_section_urls(section_url: str) -> list[str]:
+    """Return every URL from the site's sitemaps whose path shares the given
+    section_url's path prefix (e.g. .../docs discovers every .../docs/... entry,
+    plus the section page itself if listed).
 
-async def discover_section_urls(client: httpx.AsyncClient, section_url: str) -> list[str]:
-    """Fetch the site's sitemap.xml and return every URL whose path shares the
-    given section_url's path prefix (e.g. .../engineering discovers every
-    .../engineering/... entry, plus the section page itself if listed)."""
+    Delegates sitemap discovery/parsing to ultimate-sitemap-parser, which
+    handles the awkward parts we'd otherwise reinvent: sitemap indexes, gzipped
+    sitemaps, robots.txt-declared sitemaps, plain-text sitemaps, and nesting.
+    """
     parsed = urlparse(section_url)
-    sitemap_url = f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
-    response = await client.get(sitemap_url)
-    response.raise_for_status()
+    homepage = f"{parsed.scheme}://{parsed.netloc}/"
+    logger.info("Discovering pages under {} via sitemaps of {}", section_url, homepage)
 
-    root = ET.fromstring(response.text)
+    # usp does its own synchronous HTTP + sitemap discovery -- run it off the
+    # event loop so it doesn't block other in-flight requests.
+    tree = await asyncio.to_thread(sitemap_tree_for_homepage, homepage)
+    all_urls = sorted({page.url for page in tree.all_pages()})
+
     prefix = parsed.path.rstrip("/")
-
-    urls = []
-    for url_el in root.findall("sm:url", _SITEMAP_NS):
-        loc_el = url_el.find("sm:loc", _SITEMAP_NS)
-        if loc_el is None or not loc_el.text:
-            continue
-        loc_path = urlparse(loc_el.text).path.rstrip("/")
-        if loc_path == prefix or loc_path.startswith(prefix + "/"):
-            urls.append(loc_el.text)
-    return urls
+    matched = [
+        url
+        for url in all_urls
+        if (path := urlparse(url).path.rstrip("/")) == prefix or path.startswith(prefix + "/")
+    ]
+    logger.info(
+        "Sitemaps listed {} URL(s); {} match prefix {!r}", len(all_urls), len(matched), prefix
+    )
+    if not matched:
+        logger.warning(
+            "No URLs matched {!r} -- nothing will be ingested. Check the section URL's path.",
+            prefix,
+        )
+    return matched
