@@ -471,3 +471,56 @@ Note on the "Loading weights" progress bar: that ~5s is the in-RAM load (weights
 read from disk into memory), which happens on every worker process start and is
 inherent -- uvicorn `--reload` re-loads on code changes. The volume eliminates
 the expensive *re-download* (~44s), not the in-RAM load.
+
+## 2026-07-07 — Langfuse observability: compose profile + per-stage tracing
+
+Added Langfuse (self-hosted) as an on-demand Compose profile and instrumented the
+RAG pipeline so every `/search` and `/answer` call emits a nested trace. Design +
+plan: `docs/superpowers/{specs,plans}/2026-07-07-langfuse-observability*.md`.
+
+**What changed.** `hybrid_search`'s stages were extracted into `@observe`-decorated
+helpers (`_bm25_retrieve`/`_vector_retrieve` as `as_type="retriever"`, `_rrf_fuse`,
+`_rerank`); the Gemini call in `answer_service.py` became an
+`@observe(as_type="generation")` helper that logs model + token usage. The Gemini
+client factory `get_client` was renamed `get_client_gemini` to avoid colliding with
+`langfuse.get_client`. `api/main.py` gained a lifespan that flushes traces on
+shutdown. The 6-container Langfuse v3 stack (web/worker/postgres/clickhouse/redis/
+minio) sits behind `profiles: ["langfuse"]`; only `langfuse-web` publishes a host
+port (3000), the rest stay on the compose network to avoid host port clashes.
+
+**Design decisions (see spec's log for the full list).**
+- Self-host over Cloud: interview demo, free, self-contained (no live-network dep).
+- `api` does *not* `depends_on` Langfuse -- relies on SDK graceful degradation.
+- api's `LANGFUSE_*` keys default to **empty** so plain `docker compose up` is silent;
+  the dev keys go in `.env` (documented) to enable tracing. Chosen over defaulting
+  keys on, which would spam connection errors in the non-profile path.
+- `LANGFUSE_INIT_*` on `langfuse-web` auto-provisions the org/project/user + a fixed
+  dev key pair on first boot, so the demo needs zero UI setup.
+
+**Verified end-to-end** (WSL2, Docker 29.6, 15 GiB RAM). Assumption A1 (empty keys
+no-op rather than raise) confirmed at runtime -- the SDK logs a disable warning and
+`@observe` becomes a pass-through.
+- `docker compose config`: default profile = only `api`; `--profile langfuse` = api
+  + the 6 services. All 21 tests pass, ruff clean, behavior preserved.
+- `docker compose --profile langfuse up`: all 7 containers healthy; langfuse-web
+  `/api/public/health` → `{"status":"OK","version":"3.205.1"}`. Headless init created
+  the `basic-rag-pipeline` project under `default-org`; the pk-lf-.../sk-lf-... pair
+  authenticates against `/api/public/projects`.
+- `POST /answer` produced this trace (via `/api/public/traces/<id>`), 7 observations
+  nested exactly as designed -- the sync-handler/threadpool context propagated fine:
+  ```
+  answer [SPAN]
+  ├── hybrid-search [SPAN]
+  │   ├── bm25-retrieve   [RETRIEVER]
+  │   ├── vector-retrieve [RETRIEVER]
+  │   ├── rrf-fuse        [SPAN]
+  │   └── rerank          [SPAN]
+  └── gemini-generate     [GENERATION] gemini-2.5-flash  in=346 out=48 total=394
+  ```
+- Graceful degradation: `docker compose down` then plain `docker compose up` (no
+  profile, empty keys) -- `/answer` still answers and `docker compose logs api` shows
+  **no** Langfuse errors/warnings.
+
+**Not built (Phase 2, designed only):** evaluation harness (Langfuse Datasets +
+retrieval metrics from `docs/evals.md`, LLM-as-judge on answers). Blocked on a
+hand-labeled query→relevant-chunk dataset. See spec section 4 and `docs/langfuse.md`.
