@@ -91,9 +91,33 @@ def insert_chunk(
     return cursor.lastrowid
 
 
+def _to_fts_match_query(query: str) -> str:
+    """Turn free-text user input into a safe FTS5 MATCH expression.
+
+    FTS5 parses the MATCH argument as a query *expression*, not plain text:
+    characters like ? : - ( ) " and the words AND/OR/NOT are operators, so raw
+    user input (e.g. a question ending in "?") raises `fts5: syntax error`.
+    Wrapping each whitespace-separated token in double quotes makes it a literal
+    string token, immune to that grammar (embedded quotes are doubled to escape
+    them).
+
+    Tokens are joined with OR, not FTS5's implicit AND: a natural-language
+    question ("what is contextual retrieval?") would otherwise require *every*
+    word -- including stopwords -- to appear in a chunk, so BM25 would return
+    nothing for almost any question. With OR, any matching term qualifies a
+    chunk and bm25() ranks by how well it matches; the reranker downstream
+    sorts out the noise.
+    """
+    tokens = [token.replace('"', '""') for token in query.split()]
+    return " OR ".join(f'"{token}"' for token in tokens)
+
+
 def search_bm25(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
     """FTS5 MATCH query, ranked best-first. bm25() scores are negative and
     smaller (more negative) means a better match, hence ORDER BY ... ASC."""
+    match_query = _to_fts_match_query(query)
+    if not match_query:
+        return []
     rows = conn.execute(
         """
         SELECT c.id, c.url, c.title, c.heading_path, c.text, bm25(chunks_fts) AS score
@@ -103,6 +127,6 @@ def search_bm25(conn: sqlite3.Connection, query: str, limit: int) -> list[dict]:
         ORDER BY score ASC
         LIMIT ?
         """,
-        (query, limit),
+        (match_query, limit),
     ).fetchall()
     return [dict(row) for row in rows]

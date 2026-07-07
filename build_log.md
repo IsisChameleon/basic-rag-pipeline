@@ -424,3 +424,31 @@ the RAG domain package.
   asserts our prefix filtering + the empty-match case. 18 tests pass, ruff clean.
 - Verified end-to-end: `discover_section_urls("https://langfuse.com/docs")` now
   returns 104 URLs with DEBUG logging active.
+
+## 2026-07-07 — Fix `fts5: syntax error` on queries with punctuation/operators
+
+**Bug:** `/search` and `/answer` raised `sqlite3.OperationalError: fts5: syntax
+error near "?"` for ordinary queries. Reproduced: a query ending in `?` (i.e.
+almost any natural-language question), and also `:`, a bare `-`, or the words
+AND/OR/NOT, all crash.
+
+**Cause (not the SQL placeholder).** The `?` in the error is not the bound `?`
+parameter -- it's a character in the *value*. `search_bm25` passed raw user text
+straight into `WHERE chunks_fts MATCH ?`, and FTS5 parses that argument as a
+query *expression* in its own mini-language, where `? : - ( ) "` and AND/OR/NOT
+are operators. So `"...retrieval?"` is a malformed expression → syntax error.
+
+**Fix.** New `_to_fts_match_query()` sanitizes free text into a safe FTS5
+expression: each whitespace-separated token is wrapped in double quotes (a
+literal FTS5 string, immune to the grammar; embedded quotes doubled to escape),
+and tokens are joined with **OR**. OR rather than FTS5's implicit AND because a
+full question would otherwise require every word -- including stopwords like
+"what"/"is" -- to appear in a chunk, so BM25 would return nothing for nearly any
+question; with OR, any matching term qualifies and bm25()/the reranker rank it.
+Empty/whitespace-only input returns `[]` (an empty MATCH is itself a syntax
+error).
+
+- Regression test in `tests/rag/test_store.py`: a `?`-terminated question finds
+  its chunk, and operator/punctuation/empty queries don't raise. 19 tests pass.
+- Verified in the running container: `POST /search {"query":"what is contextual
+  retrieval?"}` now returns results instead of a 500.
