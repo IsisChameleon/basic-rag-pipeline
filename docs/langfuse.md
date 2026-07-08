@@ -14,7 +14,7 @@ service (adapted from the [official Langfuse stack](https://github.com/langfuse/
 
 | Service | Role |
 |---|---|
-| `langfuse-web` | UI + ingestion API — the only one with a host port (**http://localhost:3000**) |
+| `langfuse-web` | UI + ingestion API — the only one with a host port (**http://localhost:4000**) |
 | `langfuse-worker` | processes ingested events asynchronously |
 | `postgres` | transactional store |
 | `clickhouse` | trace/observation analytics store |
@@ -23,7 +23,7 @@ service (adapted from the [official Langfuse stack](https://github.com/langfuse/
 
 All the infra secrets are **fixed local-dev values** hard-coded in
 `docker-compose.yaml`; the instance is only reachable on the compose network and
-`localhost:3000`, so they are not real secrets.
+`localhost:4000`, so they are not real secrets.
 
 ## Demo runbook
 
@@ -44,7 +44,7 @@ All the infra secrets are **fixed local-dev values** hard-coded in
    it a minute. On first boot Langfuse also creates the org/project/user and the dev
    key pair automatically (no UI setup needed).
 
-3. **Open the UI:** http://localhost:3000 — log in with:
+3. **Open the UI:** http://localhost:4000 — log in with:
    - email `demo@example.com`
    - password `demopassword`
 
