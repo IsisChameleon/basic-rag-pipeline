@@ -524,3 +524,38 @@ no-op rather than raise) confirmed at runtime -- the SDK logs a disable warning 
 **Not built (Phase 2, designed only):** evaluation harness (Langfuse Datasets +
 retrieval metrics from `docs/evals.md`, LLM-as-judge on answers). Blocked on a
 hand-labeled query→relevant-chunk dataset. See spec section 4 and `docs/langfuse.md`.
+
+## 2026-07-09 — Benign sitemap parse errors during ingest (not a bug)
+
+**Symptom.** Ingesting a site (e.g. `https://www.plenti.com.au/...`) floods the api
+logs with two repeated errors before ingestion actually succeeds:
+
+```
+Unable to gunzip response for .../sitemap.xml.gz ...: Not a gzipped file (b'<!')
+Parsing sitemap from URL .../sitemap failed: Sitemap contained unexpected
+  non-standard XML DOCTYPE. Parsing not supported for security reasons.
+```
+
+**These are harmless** -- the run still finishes (`Sitemaps listed 576 URL(s); 29
+match prefix ...` → `Fetched 29 page(s)`). The lines come from the
+`ultimate-sitemap-parser` (usp) library's own stdlib `logging`, not our code (they
+lack our loguru timestamp/level format).
+
+**Root cause.** `discover_section_urls` delegates to `usp.tree.sitemap_tree_for_homepage`
+(`rag/discover.py:25`). When robots.txt doesn't declare a sitemap, usp brute-force
+**probes ~15 well-known sitemap paths** (`usp/tree.py:23` `_UNPUBLISHED_SITEMAP_PATHS`:
+`sitemap.xml(.gz)`, `sitemap_index.xml(.gz)`, `sitemap-news.xml(.gz)`,
+`admin/config/search/xmlsitemap`, ...). The site returns an **HTML soft-404 page**
+(body starts `<!DOCTYPE html>`) for the paths that don't exist, instead of a 404.
+That one fact yields both messages:
+- `.gz` candidates: usp tries to gunzip HTML → fails; `b'<!'` is the first two bytes
+  of `<!DOCTYPE html>` (`usp/helpers.py:283`), then falls back to XML parsing.
+- XML parse of the HTML: usp's security-hardened parser refuses any document with a
+  `<!DOCTYPE>` (XXE / billion-laughs guard, `usp/fetch_parse.py:460`).
+
+usp logs each failed guess and moves on; it still finds the real sitemap.
+
+**Decision: keep the noise.** No code change. Silencing is a one-liner if it ever
+becomes annoying -- `logging.getLogger("usp").setLevel(logging.CRITICAL)` in
+`core/logging_config.py:configure_logging()` (CRITICAL, not ERROR, since these are
+logged at error level but are expected).
