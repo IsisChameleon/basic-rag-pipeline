@@ -6,6 +6,7 @@ from google.genai import Client, types
 from langfuse import get_client, observe
 
 from rag import config
+from rag.observability import ObservationType
 from rag.search_service import SearchResult, hybrid_search
 
 _client: Client | None = None
@@ -49,7 +50,7 @@ def _format_sources(sources: list[SearchResult]) -> str:
     return "\n\n".join(blocks)
 
 
-@observe(as_type="generation", name="gemini-generate")
+@observe(as_type=ObservationType.GENERATION, name="gemini-generate")
 def _call_gemini(prompt: str) -> str:
     response = get_client_gemini().models.generate_content(
         model=config.LLM_MODEL,

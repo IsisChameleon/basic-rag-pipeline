@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from langfuse import observe
 
 from rag import embeddings, store, vectorstore
+from rag.observability import ObservationType
 
 # Reciprocal Rank Fusion constant (standard default) and how many candidates
 # each retrieval method contributes before reranking narrows it down.
@@ -26,7 +27,7 @@ class SearchResult:
 # not configured (no keys) the decorator is a no-op and these run unchanged.
 
 
-@observe(name="bm25-retrieve", as_type="retriever")
+@observe(name="bm25-retrieve", as_type=ObservationType.RETRIEVER)
 def _bm25_retrieve(query: str) -> list[dict]:
     conn = store.get_connection()
     try:
@@ -35,7 +36,7 @@ def _bm25_retrieve(query: str) -> list[dict]:
         conn.close()
 
 
-@observe(name="vector-retrieve", as_type="retriever")
+@observe(name="vector-retrieve", as_type=ObservationType.RETRIEVER)
 def _vector_retrieve(query: str) -> list[dict]:
     query_vector = embeddings.embed_query(query)
     return vectorstore.query(query_vector, n_results=_CANDIDATE_POOL_SIZE)

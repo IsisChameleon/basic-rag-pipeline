@@ -11,6 +11,12 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Warm the embedding + reranker models at startup so their ~8s one-time load
+    # is paid here, not inside the first /answer request. See rag.embeddings.
+    from rag import embeddings
+
+    embeddings.get_bi_encoder()
+    embeddings.get_cross_encoder()
     yield
     # Flush buffered Langfuse traces on shutdown so nothing is lost when uvicorn
     # --reload restarts the worker. No-op / harmless when tracing is disabled.

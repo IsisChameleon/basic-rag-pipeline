@@ -559,3 +559,77 @@ usp logs each failed guess and moves on; it still finds the real sitemap.
 becomes annoying -- `logging.getLogger("usp").setLevel(logging.CRITICAL)` in
 `core/logging_config.py:configure_logging()` (CRITICAL, not ERROR, since these are
 logged at error level but are expected).
+
+## 2026-07-09 — Why vectorstore caches a client but store injects a connection
+
+**Question.** `vectorstore.get_collection()` caches a module-level Chroma client
+singleton, while `store.get_connection()` returns a fresh SQLite connection every
+call and every store function takes `conn` as a parameter. Why the asymmetry?
+
+**Bottom line.** `vectorstore.get_collection()` is a cached singleton because the
+Chroma client is heavy (~150ms to build, measured), process-global, and
+thread-safe. `store.get_connection()` is a per-call factory returning an *injected*
+handle because a SQLite connection is cheap (~0.05ms), **thread-affine** (and our
+`/search` and `/answer` handlers are sync `def`, so FastAPI runs them across a
+worker thread pool), and carries a **transaction the caller needs to own** (ingest
+threads one `conn` through delete+insert per page so they commit as a unit). A
+`store.get_client()` mirroring Chroma would raise `sqlite3.ProgrammingError` when a
+cached connection crossed threads, and would collapse the ingest transaction into
+per-call autocommits. So the asymmetry is correct, not an oversight.
+
+**References**
+- `rag/vectorstore.py:12-17` -- cached `_client` singleton, `get_collection()`
+- `rag/store.py:53-60` -- `get_connection()` fresh per call, `db_path`/`:memory:` seam
+- `rag/ingest_service.py:32,49-50` -- one `conn` shared across delete+insert in a loop
+- `api/routers/query.py:45-48` -- sync handlers run on FastAPI's worker thread pool
+- Python `sqlite3.connect` (`check_same_thread=True` default → thread affinity):
+  https://docs.python.org/3/library/sqlite3.html#sqlite3.connect
+- Chroma `PersistentClient(path=...)`:
+  https://docs.trychroma.com/docs/run-chroma/clients
+
+## 2026-07-09 — Langfuse observability: first success story
+
+**The payoff.** The first end-to-end Langfuse trace of an `/answer` request did
+exactly what observability is supposed to do: it made a latency problem obvious that
+was invisible from the code. The trace tree shows one span per pipeline stage
+(`bm25-retrieve` → `vector-retrieve` → `rrf-fuse` → `rerank` → `gemini-generate`),
+and on the **first** request the `rerank` span dominated the wall clock by seconds
+while every later request's `rerank` span was tens of milliseconds. That gap is the
+whole story.
+
+**What the span revealed.** The reranker's cross-encoder is lazy-loaded on first use
+(`rag/embeddings.py:26-30`), and the FastAPI `lifespan` did no startup warm-up
+(`api/main.py`) -- so the model's one-time load was billed inside the first request,
+right in the `rerank` span. Measured on this box (`torch 2.12.1+cpu`, no CUDA):
+
+| | time |
+| --- | --- |
+| cold `CrossEncoder(...)` load | **8.2 s** |
+| warm rerank, 20 candidates | **~55 ms** |
+
+The inference was never slow; the cold load masquerading as "reranking" was. A
+cross-encoder is O(N) forward passes (one per query-candidate pair), but at
+`_CANDIDATE_POOL_SIZE = 20` (`rag/search_service.py:12`) that is only ~55 ms.
+
+**Fix (pattern, not patch): move init out of the request path.** Warm both models in
+`lifespan` before `yield` so the ~8 s is paid once at boot, not by the first user.
+Verified via `async with lifespan(app)`: both `embeddings._bi_encoder` and
+`_cross_encoder` are non-`None` before the app serves, and the first request's rerank
+is warm.
+
+**Typed observation types.** While here, replaced the bare `as_type="generation"` /
+`"retriever"` string literals with a small local `StrEnum`
+(`rag/observability.py`). Note the sharp edge that motivated a *local* enum:
+Langfuse's own `langfuse.api.ObservationType.GENERATION` is uppercase
+(`"GENERATION"`), but `@observe` validates against lowercase and **silently downgrades
+an unrecognized value to `"span"`** rather than erroring -- so the official enum would
+have quietly mislabelled every generation span. The local enum mirrors the exact
+lowercase set the decorator accepts.
+
+**References**
+- `rag/observability.py` -- local `ObservationType(StrEnum)`, lowercase values
+- `rag/answer_service.py:53`, `rag/search_service.py:29,38` -- `as_type=ObservationType.*`
+- `.venv/.../langfuse/_client/observe.py:165-170` -- case-sensitive validation, silent
+  fallback to `span`
+- `rag/embeddings.py:26-30,43-46` -- lazy `get_cross_encoder`, `rerank`
+- `api/main.py` -- `lifespan` startup warm-up of both models
