@@ -471,3 +471,165 @@ Note on the "Loading weights" progress bar: that ~5s is the in-RAM load (weights
 read from disk into memory), which happens on every worker process start and is
 inherent -- uvicorn `--reload` re-loads on code changes. The volume eliminates
 the expensive *re-download* (~44s), not the in-RAM load.
+
+## 2026-07-07 — Langfuse observability: compose profile + per-stage tracing
+
+Added Langfuse (self-hosted) as an on-demand Compose profile and instrumented the
+RAG pipeline so every `/search` and `/answer` call emits a nested trace. Design +
+plan: `docs/superpowers/{specs,plans}/2026-07-07-langfuse-observability*.md`.
+
+**What changed.** `hybrid_search`'s stages were extracted into `@observe`-decorated
+helpers (`_bm25_retrieve`/`_vector_retrieve` as `as_type="retriever"`, `_rrf_fuse`,
+`_rerank`); the Gemini call in `answer_service.py` became an
+`@observe(as_type="generation")` helper that logs model + token usage. The Gemini
+client factory `get_client` was renamed `get_client_gemini` to avoid colliding with
+`langfuse.get_client`. `api/main.py` gained a lifespan that flushes traces on
+shutdown. The 6-container Langfuse v3 stack (web/worker/postgres/clickhouse/redis/
+minio) sits behind `profiles: ["langfuse"]`; only `langfuse-web` publishes a host
+port (3000), the rest stay on the compose network to avoid host port clashes.
+
+**Design decisions (see spec's log for the full list).**
+- Self-host over Cloud: interview demo, free, self-contained (no live-network dep).
+- `api` does *not* `depends_on` Langfuse -- relies on SDK graceful degradation.
+- api's `LANGFUSE_*` keys default to **empty** so plain `docker compose up` is silent;
+  the dev keys go in `.env` (documented) to enable tracing. Chosen over defaulting
+  keys on, which would spam connection errors in the non-profile path.
+- `LANGFUSE_INIT_*` on `langfuse-web` auto-provisions the org/project/user + a fixed
+  dev key pair on first boot, so the demo needs zero UI setup.
+
+**Verified end-to-end** (WSL2, Docker 29.6, 15 GiB RAM). Assumption A1 (empty keys
+no-op rather than raise) confirmed at runtime -- the SDK logs a disable warning and
+`@observe` becomes a pass-through.
+- `docker compose config`: default profile = only `api`; `--profile langfuse` = api
+  + the 6 services. All 21 tests pass, ruff clean, behavior preserved.
+- `docker compose --profile langfuse up`: all 7 containers healthy; langfuse-web
+  `/api/public/health` → `{"status":"OK","version":"3.205.1"}`. Headless init created
+  the `basic-rag-pipeline` project under `default-org`; the pk-lf-.../sk-lf-... pair
+  authenticates against `/api/public/projects`.
+- `POST /answer` produced this trace (via `/api/public/traces/<id>`), 7 observations
+  nested exactly as designed -- the sync-handler/threadpool context propagated fine:
+  ```
+  answer [SPAN]
+  ├── hybrid-search [SPAN]
+  │   ├── bm25-retrieve   [RETRIEVER]
+  │   ├── vector-retrieve [RETRIEVER]
+  │   ├── rrf-fuse        [SPAN]
+  │   └── rerank          [SPAN]
+  └── gemini-generate     [GENERATION] gemini-2.5-flash  in=346 out=48 total=394
+  ```
+- Graceful degradation: `docker compose down` then plain `docker compose up` (no
+  profile, empty keys) -- `/answer` still answers and `docker compose logs api` shows
+  **no** Langfuse errors/warnings.
+
+**Not built (Phase 2, designed only):** evaluation harness (Langfuse Datasets +
+retrieval metrics from `docs/evals.md`, LLM-as-judge on answers). Blocked on a
+hand-labeled query→relevant-chunk dataset. See spec section 4 and `docs/langfuse.md`.
+
+## 2026-07-09 — Benign sitemap parse errors during ingest (not a bug)
+
+**Symptom.** Ingesting a site (e.g. `https://www.plenti.com.au/...`) floods the api
+logs with two repeated errors before ingestion actually succeeds:
+
+```
+Unable to gunzip response for .../sitemap.xml.gz ...: Not a gzipped file (b'<!')
+Parsing sitemap from URL .../sitemap failed: Sitemap contained unexpected
+  non-standard XML DOCTYPE. Parsing not supported for security reasons.
+```
+
+**These are harmless** -- the run still finishes (`Sitemaps listed 576 URL(s); 29
+match prefix ...` → `Fetched 29 page(s)`). The lines come from the
+`ultimate-sitemap-parser` (usp) library's own stdlib `logging`, not our code (they
+lack our loguru timestamp/level format).
+
+**Root cause.** `discover_section_urls` delegates to `usp.tree.sitemap_tree_for_homepage`
+(`rag/discover.py:25`). When robots.txt doesn't declare a sitemap, usp brute-force
+**probes ~15 well-known sitemap paths** (`usp/tree.py:23` `_UNPUBLISHED_SITEMAP_PATHS`:
+`sitemap.xml(.gz)`, `sitemap_index.xml(.gz)`, `sitemap-news.xml(.gz)`,
+`admin/config/search/xmlsitemap`, ...). The site returns an **HTML soft-404 page**
+(body starts `<!DOCTYPE html>`) for the paths that don't exist, instead of a 404.
+That one fact yields both messages:
+- `.gz` candidates: usp tries to gunzip HTML → fails; `b'<!'` is the first two bytes
+  of `<!DOCTYPE html>` (`usp/helpers.py:283`), then falls back to XML parsing.
+- XML parse of the HTML: usp's security-hardened parser refuses any document with a
+  `<!DOCTYPE>` (XXE / billion-laughs guard, `usp/fetch_parse.py:460`).
+
+usp logs each failed guess and moves on; it still finds the real sitemap.
+
+**Decision: keep the noise.** No code change. Silencing is a one-liner if it ever
+becomes annoying -- `logging.getLogger("usp").setLevel(logging.CRITICAL)` in
+`core/logging_config.py:configure_logging()` (CRITICAL, not ERROR, since these are
+logged at error level but are expected).
+
+## 2026-07-09 — Why vectorstore caches a client but store injects a connection
+
+**Question.** `vectorstore.get_collection()` caches a module-level Chroma client
+singleton, while `store.get_connection()` returns a fresh SQLite connection every
+call and every store function takes `conn` as a parameter. Why the asymmetry?
+
+**Bottom line.** `vectorstore.get_collection()` is a cached singleton because the
+Chroma client is heavy (~150ms to build, measured), process-global, and
+thread-safe. `store.get_connection()` is a per-call factory returning an *injected*
+handle because a SQLite connection is cheap (~0.05ms), **thread-affine** (and our
+`/search` and `/answer` handlers are sync `def`, so FastAPI runs them across a
+worker thread pool), and carries a **transaction the caller needs to own** (ingest
+threads one `conn` through delete+insert per page so they commit as a unit). A
+`store.get_client()` mirroring Chroma would raise `sqlite3.ProgrammingError` when a
+cached connection crossed threads, and would collapse the ingest transaction into
+per-call autocommits. So the asymmetry is correct, not an oversight.
+
+**References**
+- `rag/vectorstore.py:12-17` -- cached `_client` singleton, `get_collection()`
+- `rag/store.py:53-60` -- `get_connection()` fresh per call, `db_path`/`:memory:` seam
+- `rag/ingest_service.py:32,49-50` -- one `conn` shared across delete+insert in a loop
+- `api/routers/query.py:45-48` -- sync handlers run on FastAPI's worker thread pool
+- Python `sqlite3.connect` (`check_same_thread=True` default → thread affinity):
+  https://docs.python.org/3/library/sqlite3.html#sqlite3.connect
+- Chroma `PersistentClient(path=...)`:
+  https://docs.trychroma.com/docs/run-chroma/clients
+
+## 2026-07-09 — Langfuse observability: first success story
+
+**The payoff.** The first end-to-end Langfuse trace of an `/answer` request did
+exactly what observability is supposed to do: it made a latency problem obvious that
+was invisible from the code. The trace tree shows one span per pipeline stage
+(`bm25-retrieve` → `vector-retrieve` → `rrf-fuse` → `rerank` → `gemini-generate`),
+and on the **first** request the `rerank` span dominated the wall clock by seconds
+while every later request's `rerank` span was tens of milliseconds. That gap is the
+whole story.
+
+**What the span revealed.** The reranker's cross-encoder is lazy-loaded on first use
+(`rag/embeddings.py:26-30`), and the FastAPI `lifespan` did no startup warm-up
+(`api/main.py`) -- so the model's one-time load was billed inside the first request,
+right in the `rerank` span. Measured on this box (`torch 2.12.1+cpu`, no CUDA):
+
+| | time |
+| --- | --- |
+| cold `CrossEncoder(...)` load | **8.2 s** |
+| warm rerank, 20 candidates | **~55 ms** |
+
+The inference was never slow; the cold load masquerading as "reranking" was. A
+cross-encoder is O(N) forward passes (one per query-candidate pair), but at
+`_CANDIDATE_POOL_SIZE = 20` (`rag/search_service.py:12`) that is only ~55 ms.
+
+**Fix (pattern, not patch): move init out of the request path.** Warm both models in
+`lifespan` before `yield` so the ~8 s is paid once at boot, not by the first user.
+Verified via `async with lifespan(app)`: both `embeddings._bi_encoder` and
+`_cross_encoder` are non-`None` before the app serves, and the first request's rerank
+is warm.
+
+**Typed observation types.** While here, replaced the bare `as_type="generation"` /
+`"retriever"` string literals with a small local `StrEnum`
+(`rag/observability.py`). Note the sharp edge that motivated a *local* enum:
+Langfuse's own `langfuse.api.ObservationType.GENERATION` is uppercase
+(`"GENERATION"`), but `@observe` validates against lowercase and **silently downgrades
+an unrecognized value to `"span"`** rather than erroring -- so the official enum would
+have quietly mislabelled every generation span. The local enum mirrors the exact
+lowercase set the decorator accepts.
+
+**References**
+- `rag/observability.py` -- local `ObservationType(StrEnum)`, lowercase values
+- `rag/answer_service.py:53`, `rag/search_service.py:29,38` -- `as_type=ObservationType.*`
+- `.venv/.../langfuse/_client/observe.py:165-170` -- case-sensitive validation, silent
+  fallback to `span`
+- `rag/embeddings.py:26-30,43-46` -- lazy `get_cross_encoder`, `rerank`
+- `api/main.py` -- `lifespan` startup warm-up of both models

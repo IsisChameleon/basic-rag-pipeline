@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from google.genai import Client, types
+from langfuse import get_client, observe
 
 from rag import config
+from rag.observability import ObservationType
 from rag.search_service import SearchResult, hybrid_search
 
 _client: Client | None = None
@@ -28,7 +30,7 @@ class AnswerResult:
     sources: list[SearchResult]
 
 
-def get_client() -> Client:
+def get_client_gemini() -> Client:
     global _client
     if _client is None:
         if not config.GOOGLE_API_KEY:
@@ -48,6 +50,34 @@ def _format_sources(sources: list[SearchResult]) -> str:
     return "\n\n".join(blocks)
 
 
+@observe(as_type=ObservationType.GENERATION, name="gemini-generate")
+def _call_gemini(prompt: str) -> str:
+    response = get_client_gemini().models.generate_content(
+        model=config.LLM_MODEL,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=_SYSTEM_INSTRUCTION,
+            temperature=0.0,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
+    # Record model + token usage on the generation span when Langfuse is active.
+    # google-genai exposes counts on response.usage_metadata; skip if absent
+    # (e.g. the fake client used in tests) -- update_current_generation no-ops
+    # when tracing is disabled.
+    usage = getattr(response, "usage_metadata", None)
+    if usage is not None:
+        get_client().update_current_generation(
+            model=config.LLM_MODEL,
+            usage_details={
+                "input": getattr(usage, "prompt_token_count", None),
+                "output": getattr(usage, "candidates_token_count", None),
+            },
+        )
+    return response.text or ""
+
+
+@observe(name="answer")
 def generate_answer(query: str, top_k: int = 5) -> AnswerResult:
     """Full RAG answer step: embed + retrieve the query's most relevant chunks
     (hybrid_search), hand them to Gemini as numbered sources, and ask it to
@@ -58,14 +88,4 @@ def generate_answer(query: str, top_k: int = 5) -> AnswerResult:
         return AnswerResult(answer="No relevant sources were found for this query.", sources=[])
 
     prompt = f"Question: {query}\n\nSources:\n{_format_sources(sources)}"
-
-    response = get_client().models.generate_content(
-        model=config.LLM_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=_SYSTEM_INSTRUCTION,
-            temperature=0.0,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-    )
-    return AnswerResult(answer=response.text or "", sources=sources)
+    return AnswerResult(answer=_call_gemini(prompt), sources=sources)
