@@ -1,5 +1,10 @@
 # Architecture Refactor: Ports & Adapters — Design
 
+> **DESCOPED 2026-07-15 — see Addendum at the end.** The injection/modeling
+> core of this design is being implemented; the ports layer (Protocols,
+> src-layout, domain/services/adapters taxonomy) is deferred until a second
+> implementation of any seam actually exists.
+
 > Status: **complete — all sections reviewed with user 2026-07-13/14**;
 > self-review pass done 2026-07-14 (see Design review notes at the end).
 > Domain layer is revision 2 (fewer chunk models, URI-based identity,
@@ -606,3 +611,33 @@ is machine-checked, not tribal knowledge.
   race exists today; single background worker makes it moot for now).
 - Chroma metadata gains `content_hash`/`fetched_at` so retrieval can
   return complete `ChunkRecord`s from either store.
+
+## Addendum — descope decision (2026-07-15, agreed with user)
+
+Implement the **injection and modeling core** of this design; defer the
+ports layer until a second implementation of any seam actually exists.
+
+**Kept**: pydantic domain models incl. `ChunkRecord` with URI identity and
+deterministic TEXT ids; role-named concrete classes with constructor
+injection (`ChunkRepository`/sqlite, `VectorStore`/chroma, `Embedder`,
+`Reranker`, `LLMClient`/gemini, `DocumentSource`/web, `MarkdownChunker`,
+`JobStore`); the three service classes with tuning params as constructor
+defaults; `Container` + `build_container` composition root; pydantic-settings;
+fakes-based tests with no `mock.patch`; lazy model loading as instance state
+with `warm_up()`; unchanged wire contract.
+
+**Dropped (deferred)**: `domain/contracts.py` Protocols; the src-layout
+migration and `domain/services/adapters` folder taxonomy (flat `rag/`,
+`api/`, `core/` stay); import-linter layers contract.
+
+**Rationale**: Python's structural typing makes ports retroactively free.
+Because concrete classes carry the *role* names, adding a Protocol later is
+one mechanical rename (`ChunkRepository` → `SqliteChunkRepository`) plus an
+8-line Protocol under the vacated name — zero call-site churn. The part of
+the refactor that gets more expensive with time (globals → constructor
+injection, touching every call site and test) is done now; the part that is
+free to defer (interface declarations) is deferred.
+
+**Migration re-sequenced** to keep every commit green: new classes are built
+alongside the old modules, the API flips to the new graph in one commit, and
+the old modules are deleted last.
