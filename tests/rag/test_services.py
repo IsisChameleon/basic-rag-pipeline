@@ -146,6 +146,27 @@ class TestAnswerService:
         assert "contextual retrieval explained" in prompt
         assert "cite" in llm.systems[0].lower()
 
+    def test_sources_are_numbered_in_citation_order(self) -> None:
+        repository = FakeChunkRepository()
+        repository.add(
+            [
+                _record("https://a", 0, "retrieval performance details"),
+                _record("https://b", 0, "a retrieval primer"),
+            ]
+        )
+        llm = FakeLLMClient()
+        service = AnswerService(_search_service(repository=repository), llm)
+
+        result = service.answer("retrieval", top_k=5)
+
+        # sources come back in citation order: [1] is sources[0], [2] is
+        # sources[1] -- and the prompt numbers them the same way.
+        prompt = llm.prompts[0]
+        first, second = result.sources
+        assert f"[1] Title > Intro ({first.chunk.uri})" in prompt
+        assert f"[2] Title > Intro ({second.chunk.uri})" in prompt
+        assert prompt.index("[1]") < prompt.index("[2]")
+
     def test_no_sources_short_circuits_without_calling_llm(self) -> None:
         llm = FakeLLMClient()
         service = AnswerService(_search_service(), llm)
