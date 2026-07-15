@@ -1,54 +1,50 @@
 from fastapi.testclient import TestClient
 
 from api.main import app
-from api.routers import query as query_router_module
-from rag.answer_service import AnswerResult
-from rag.search_service import SearchResult
+from rag.models import ChunkRecord
+from tests.fakes import build_fake_container
 
 
-def _fake_results() -> list[SearchResult]:
-    return [
-        SearchResult(
-            text="chunk text",
-            url="https://example.com/page",
-            title="Page title",
-            heading_path="Intro",
-            score=0.9,
-        )
-    ]
-
-
-def test_search_returns_results(monkeypatch) -> None:
-    monkeypatch.setattr(
-        query_router_module, "hybrid_search", lambda query, top_k=5: _fake_results()
+def _stored_record() -> ChunkRecord:
+    return ChunkRecord(
+        id="https://example.com/page#0",
+        uri="https://example.com/page",
+        title="Page title",
+        heading_path="Intro",
+        chunk_index=0,
+        text="chunk text",
+        content_hash="hash",
+        fetched_at="2026-01-01T00:00:00+00:00",
     )
 
+
+def test_search_returns_results() -> None:
+    app.state.container = build_fake_container(records=[_stored_record()])
+
     client = TestClient(app)
-    response = client.post("/search", json={"query": "hello"})
+    response = client.post("/search", json={"query": "chunk"})
 
     assert response.status_code == 200
     results = response.json()["results"]
+    # Wire contract: internal `uri` maps back to the `url` field.
     assert results == [
         {
             "text": "chunk text",
             "url": "https://example.com/page",
             "title": "Page title",
             "heading_path": "Intro",
-            "score": 0.9,
+            "score": 1.0,  # FakeReranker: one query term overlaps the text
         }
     ]
 
 
-def test_answer_returns_generated_answer_with_ordered_citations(monkeypatch) -> None:
-    # generate_answer is the seam the router depends on -- patched where it's
-    # used. Its own Gemini call is covered separately in test_answer_service.
-    def fake_generate_answer(query, top_k=5):
-        return AnswerResult(answer="Contextual retrieval helps [1].", sources=_fake_results())
-
-    monkeypatch.setattr(query_router_module, "generate_answer", fake_generate_answer)
+def test_answer_returns_generated_answer_with_ordered_citations() -> None:
+    app.state.container = build_fake_container(
+        records=[_stored_record()], llm_response="Contextual retrieval helps [1]."
+    )
 
     client = TestClient(app)
-    response = client.post("/answer", json={"query": "hello"})
+    response = client.post("/answer", json={"query": "chunk"})
 
     assert response.status_code == 200
     body = response.json()

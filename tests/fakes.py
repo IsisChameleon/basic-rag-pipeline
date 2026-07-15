@@ -84,10 +84,55 @@ class FakeLLMClient:
 
 
 class FakeDocumentSource:
-    def __init__(self, documents: list[Document | None]) -> None:
+    def __init__(
+        self, documents: list[Document | None], error: Exception | None = None
+    ) -> None:
         self.documents = documents
+        self.error = error
         self.loaded_urls: list[str] = []
 
     async def load(self, source_url: str) -> list[Document | None]:
         self.loaded_urls.append(source_url)
+        if self.error is not None:
+            raise self.error
         return self.documents
+
+
+def build_fake_container(
+    *,
+    records: list[ChunkRecord] | None = None,
+    documents: list[Document | None] | None = None,
+    source_error: Exception | None = None,
+    llm_response: str = "a generated answer [1]",
+):
+    """A Container wired entirely from fakes (plus our real chunker and
+    services), for API tests: `app.state.container = build_fake_container(...)`.
+    `records` pre-populates retrieval; `documents`/`source_error` script the
+    ingest source."""
+    from api.dependencies import Container
+    from core.settings import Settings
+    from rag.job_store import JobStore
+    from rag.markdown_chunker import MarkdownChunker
+    from rag.services import AnswerService, IngestService, SearchService
+
+    repository = FakeChunkRepository()
+    repository.add(records or [])
+    vector_store = FakeVectorStore()
+    embedder = FakeEmbedder()
+    reranker = FakeReranker()
+    search_service = SearchService(repository, vector_store, embedder, reranker)
+    return Container(
+        settings=Settings(),
+        search_service=search_service,
+        answer_service=AnswerService(search_service, FakeLLMClient(response=llm_response)),
+        ingest_service=IngestService(
+            FakeDocumentSource(documents or [], error=source_error),
+            MarkdownChunker(count_tokens=embedder.count_tokens),
+            embedder,
+            repository,
+            vector_store,
+        ),
+        job_store=JobStore(),
+        embedder=embedder,
+        reranker=reranker,
+    )
