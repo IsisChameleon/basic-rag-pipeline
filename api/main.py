@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from api.dependencies import build_container
+from api.container import build_api_container
 from api.routers.ingest import router as ingest_router
 from api.routers.query import router as query_router
 from core.logging_config import configure_logging
@@ -12,7 +12,7 @@ configure_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    container = build_container()  # cheap: nothing heavy loads here
+    container = build_api_container()  # cheap: nothing heavy loads here
     # Warm the embedding + reranker models now so their ~8s one-time load is
     # paid at boot (fail-fast, fast first request), not inside the first
     # /search. Runs before any request thread exists, so the lazy first load

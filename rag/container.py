@@ -1,10 +1,9 @@
 """Builds the RAG object graph, shared by every entrypoint.
 
-This is a factory, not a composition root: a composition root belongs to a
-*process* (api/dependencies.py for the API, and later the agent's own), and
-each one calls this for the RAG half of its graph, then adds what only it
-needs. Keeping the shared half here means a second entrypoint cannot drag
-the first one's dependencies -- or its required config -- along with it."""
+Each entrypoint's own container (api.container, and later the agent's)
+composes this one and adds what only it needs, so a second entrypoint cannot
+drag the first one's dependencies -- or its required config -- along with
+it."""
 
 from __future__ import annotations
 
@@ -21,7 +20,7 @@ from rag.vector_store import VectorStore
 
 
 @dataclass
-class RagServices:
+class RagContainer:
     search_service: SearchService
     answer_service: AnswerService
     ingest_service: IngestService
@@ -36,7 +35,7 @@ class RagServices:
         self.reranker.warm_up()
 
 
-def build_rag_services(settings: Settings) -> RagServices:
+def build_rag_container(settings: Settings) -> RagContainer:
     embedder = Embedder(settings.embedding_model)  # cheap; model loads lazily
     reranker = Reranker(settings.reranker_model)  # cheap; model loads lazily
     repository = ChunkRepository(settings.db_path)
@@ -48,7 +47,7 @@ def build_rag_services(settings: Settings) -> RagServices:
     )
     llm = LLMClient(api_key=settings.google_api_key, model=settings.llm_model)
     search_service = SearchService(repository, vector_store, embedder, reranker)
-    return RagServices(
+    return RagContainer(
         search_service=search_service,
         answer_service=AnswerService(search_service, llm),
         ingest_service=IngestService(

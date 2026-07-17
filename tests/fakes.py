@@ -105,13 +105,13 @@ def build_fake_container(
     source_error: Exception | None = None,
     llm_response: str = "a generated answer [1]",
 ):
-    """A Container wired entirely from fakes (plus our real chunker and
+    """An ApiContainer wired entirely from fakes (plus our real chunker and
     services), for API tests: `app.state.container = build_fake_container(...)`.
     `records` pre-populates retrieval; `documents`/`source_error` script the
     ingest source."""
-    from api.dependencies import Container
+    from api.container import ApiContainer
     from core.settings import Settings
-    from rag.factory import RagServices
+    from rag.container import RagContainer
     from rag.job_store import JobStore
     from rag.markdown_chunker import MarkdownChunker
     from rag.services import AnswerService, IngestService, SearchService
@@ -122,9 +122,9 @@ def build_fake_container(
     embedder = FakeEmbedder()
     reranker = FakeReranker()
     search_service = SearchService(repository, vector_store, embedder, reranker)
-    return Container(
+    return ApiContainer(
         settings=Settings(),
-        rag=RagServices(
+        rag=RagContainer(
             search_service=search_service,
             answer_service=AnswerService(search_service, FakeLLMClient(response=llm_response)),
             ingest_service=IngestService(

@@ -8,8 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """All runtime configuration in one place (env vars / .env). Values flow
-    to the classes that need them via build_container -- nothing outside the
-    composition root reads settings."""
+    to the classes that need them via each entrypoint's container -- nothing
+    outside a composition root reads settings."""
 
     # validation_alias keeps the pre-existing env var name RAG_DATA_DIR
     # (set in docker-compose.yaml).
