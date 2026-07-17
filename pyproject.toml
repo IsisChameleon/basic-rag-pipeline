@@ -24,6 +24,7 @@ dependencies = [
     # for one pulled in purely transitively (verified empirically).
     "torch",
     "pydantic-settings>=2.14.2",
+    "langgraph>=1.2.9",
 ]
 
 [dependency-groups]
