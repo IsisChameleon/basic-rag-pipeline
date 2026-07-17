@@ -11,6 +11,9 @@ from rag.models import ChunkRecord
 # key leaves the table's *implicit* rowid in place, so the FTS table and the
 # sync triggers reference `rowid` explicitly (this is the load-bearing detail
 # -- see tests/rag/test_chunk_repository.py).
+#
+# Schema + triggers follow the external-content pattern from the FTS5 docs,
+# §4.4.3 External Content Tables: https://sqlite.org/fts5.html#external_content_tables
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
     id TEXT PRIMARY KEY,
