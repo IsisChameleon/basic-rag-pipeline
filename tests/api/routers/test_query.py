@@ -26,11 +26,10 @@ def test_search_returns_results() -> None:
 
     assert response.status_code == 200
     results = response.json()["results"]
-    # Wire contract: internal `uri` maps back to the `url` field.
     assert results == [
         {
             "text": "chunk text",
-            "url": "https://example.com/page",
+            "uri": "https://example.com/page",
             "title": "Page title",
             "heading_path": "Intro",
             "score": 1.0,  # FakeReranker: one query term overlaps the text
@@ -50,5 +49,5 @@ def test_answer_returns_generated_answer_with_ordered_citations() -> None:
     body = response.json()
     assert body["answer"] == "Contextual retrieval helps [1]."
     assert body["citations"] == [
-        {"url": "https://example.com/page", "title": "Page title", "heading_path": "Intro"}
+        {"uri": "https://example.com/page", "title": "Page title", "heading_path": "Intro"}
     ]

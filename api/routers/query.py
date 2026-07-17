@@ -15,8 +15,7 @@ router = APIRouter(tags=["query"])
 # thread pool is what keeps that off the shared event loop -- see
 # api/routers/ingest.py for the same reasoning.
 
-# Domain -> wire mapping happens here (chunk.uri -> url etc.); the wire
-# contract predates the internal renames and must not change.
+# Domain -> wire mapping happens here.
 
 
 @router.post("/search", response_model=schemas.SearchResponse)
@@ -29,7 +28,7 @@ def search(
         results=[
             schemas.SearchResult(
                 text=r.chunk.text,
-                url=r.chunk.uri,
+                uri=r.chunk.uri,
                 title=r.chunk.title,
                 heading_path=r.chunk.heading_path,
                 score=r.score,
@@ -50,7 +49,7 @@ def answer(
     result = answer_service.answer(request.query, top_k=5)
     citations = [
         schemas.Citation(
-            url=s.chunk.uri, title=s.chunk.title, heading_path=s.chunk.heading_path
+            uri=s.chunk.uri, title=s.chunk.title, heading_path=s.chunk.heading_path
         )
         for s in result.sources
     ]

@@ -1,7 +1,7 @@
-"""Request/response wire models for every route, consolidated. The wire
-contract predates the internal ChunkRecord/uri naming -- fields are still
-named `url` etc. so existing clients keep working; routers map domain
-objects to these shapes."""
+"""Request/response wire models for every route, consolidated. Routers map
+domain objects to these shapes. A chunk's source page is `uri` here to match
+the domain naming (ChunkRecord.uri); `IngestRequest.url` stays `url` because
+it really is a URL to go fetch, not a stored chunk's identifier."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class SearchRequest(BaseModel):
 
 class SearchResult(BaseModel):
     text: str  # the chunk's content, e.g. "Contextual Retrieval reduces..."
-    url: str  # the source page, e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
+    uri: str  # the source page, e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
     title: str  # the source page's title, e.g. "Introducing Contextual Retrieval"
     heading_path: str  # the chunk's position in the page's heading structure,
     # e.g. "Introducing Contextual Retrieval > Implementation" for a chunk
@@ -51,7 +51,7 @@ class AnswerRequest(BaseModel):
 
 
 class Citation(BaseModel):
-    url: str  # e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
+    uri: str  # e.g. "https://www.anthropic.com/engineering/contextual-retrieval"
     title: str  # e.g. "Introducing Contextual Retrieval"
     heading_path: str  # e.g. "Introducing Contextual Retrieval > Implementation"
 
