@@ -36,7 +36,7 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${API_PORT:-8050}:8000"
     command: sh -c "uv sync --frozen && uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
 
   # --- Langfuse (self-hosted observability), only started with:
@@ -44,9 +44,10 @@ services:
   # Adapted from the official stack:
   # https://github.com/langfuse/langfuse/blob/main/docker-compose.yml
   # Secrets below are FIXED LOCAL-DEV values -- this instance is only reachable
-  # on the compose network + localhost:3000, never exposed, so they are not real
-  # secrets. Only langfuse-web publishes a host port (3000); every other service
-  # stays internal to the compose network to avoid clashing with host ports.
+  # on the compose network + its published localhost port, never exposed, so they
+  # are not real secrets. Only langfuse-web publishes a host port (LANGFUSE_PORT,
+  # default 3050); every other service stays internal to the compose network to
+  # avoid clashing with host ports.
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3
     profiles: ["langfuse"]
@@ -94,12 +95,13 @@ services:
     restart: always
     depends_on: *langfuse-depends-on
     ports:
-      # Host 4000 -> container 3000 (host 3000 collides with other local stacks).
-      # In-network callers still use langfuse-web:3000 (see api LANGFUSE_HOST).
-      - "4000:3000"
+      # Host LANGFUSE_PORT (default 3050) -> container 3000 (hosts 3000/4000
+      # collide with other local stacks). In-network callers still use
+      # langfuse-web:3000 (see api LANGFUSE_HOST).
+      - "${LANGFUSE_PORT:-3050}:3000"
     environment:
       <<: *langfuse-worker-env
-      NEXTAUTH_URL: http://localhost:4000
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3050}
       NEXTAUTH_SECRET: mysecret
       # Auto-provision an org, project, login user and a FIXED dev API key pair
       # on first boot, so the demo needs zero clicking in the UI. Idempotent:

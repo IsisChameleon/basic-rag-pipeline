@@ -4,6 +4,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rag.models import Chunk
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
 _CODE_FENCE_RE = re.compile(r"^\s*```")
@@ -11,16 +13,10 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 # Chunk size is tied to the embedding model's token limit, not a fixed
 # constant: 350 leaves comfortable headroom under bge-small-en-v1.5's
-# 512-token max_seq_length (see rag/embeddings.py). Revisit this value if the
+# 512-token max_seq_length (see rag/encoders.py). Revisit this value if the
 # embedding model changes.
 DEFAULT_TARGET_TOKENS = 350
 DEFAULT_OVERLAP_TOKENS = 50
-
-
-@dataclass
-class Chunk:
-    text: str
-    heading_path: str
 
 
 @dataclass
@@ -111,69 +107,82 @@ def _split_oversized_para(
     return pieces
 
 
-def chunk_markdown(
-    markdown: str,
-    count_tokens: Callable[[str], int],
-    target_tokens: int = DEFAULT_TARGET_TOKENS,
-    overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
-) -> list[Chunk]:
-    """Split Markdown into chunks on structural boundaries: a new chunk starts
-    at every heading change, tables/code blocks are always their own chunk
-    (never split, even if oversized), and consecutive paragraphs are packed
-    together up to target_tokens with overlap_tokens carried into the next
-    chunk when a size-triggered (not heading-triggered) split happens."""
-    items = _parse_blocks(markdown)
+class MarkdownChunker:
+    """Structural markdown chunking: a new chunk starts at every heading
+    change, tables/code blocks are always their own chunk (never split, even
+    if oversized), and consecutive paragraphs are packed together up to
+    target_tokens with overlap_tokens carried into the next chunk when a
+    size-triggered (not heading-triggered) split happens.
 
-    heading_stack: list[tuple[int, str]] = []
-    chunks: list[Chunk] = []
-    current_texts: list[str] = []
-    current_tokens = 0
+    The token counter is injected at construction -- typically
+    Embedder.count_tokens, tying chunk sizing to the model that will actually
+    embed the chunks -- so callers never pass it per call."""
 
-    def heading_path() -> str:
-        return " > ".join(text for _, text in heading_stack)
+    def __init__(
+        self,
+        count_tokens: Callable[[str], int],
+        *,
+        target_tokens: int = DEFAULT_TARGET_TOKENS,
+        overlap_tokens: int = DEFAULT_OVERLAP_TOKENS,
+    ) -> None:
+        self._count_tokens = count_tokens
+        self._target_tokens = target_tokens
+        self._overlap_tokens = overlap_tokens
 
-    def flush(carry_overlap: bool) -> None:
-        nonlocal current_texts, current_tokens
-        if not current_texts:
-            return
-        chunks.append(Chunk(text="\n\n".join(current_texts), heading_path=heading_path()))
-        if carry_overlap:
-            tail = current_texts[-1]
-            tail_tokens = count_tokens(tail)
-            current_texts = [tail] if tail_tokens <= overlap_tokens else []
-            current_tokens = tail_tokens if current_texts else 0
-        else:
-            current_texts = []
-            current_tokens = 0
+    def chunk(self, markdown: str) -> list[Chunk]:
+        items = _parse_blocks(markdown)
+        count_tokens = self._count_tokens
 
-    def add_piece(piece: str) -> None:
-        nonlocal current_tokens
-        piece_tokens = count_tokens(piece)
-        if current_texts and current_tokens + piece_tokens > target_tokens:
-            flush(carry_overlap=True)
-        current_texts.append(piece)
-        current_tokens += piece_tokens
+        heading_stack: list[tuple[int, str]] = []
+        chunks: list[Chunk] = []
+        current_texts: list[str] = []
+        current_tokens = 0
 
-    for kind, payload in items:
-        if kind == "heading":
-            flush(carry_overlap=False)
-            level, text = payload
-            while heading_stack and heading_stack[-1][0] >= level:
-                heading_stack.pop()
-            heading_stack.append((level, text))
-            continue
+        def heading_path() -> str:
+            return " > ".join(text for _, text in heading_stack)
 
-        block: _Block = payload
-        if block.kind in ("table", "code"):
-            flush(carry_overlap=False)
-            chunks.append(Chunk(text=block.text, heading_path=heading_path()))
-            continue
+        def flush(carry_overlap: bool) -> None:
+            nonlocal current_texts, current_tokens
+            if not current_texts:
+                return
+            chunks.append(Chunk(text="\n\n".join(current_texts), heading_path=heading_path()))
+            if carry_overlap:
+                tail = current_texts[-1]
+                tail_tokens = count_tokens(tail)
+                current_texts = [tail] if tail_tokens <= self._overlap_tokens else []
+                current_tokens = tail_tokens if current_texts else 0
+            else:
+                current_texts = []
+                current_tokens = 0
 
-        if count_tokens(block.text) > target_tokens:
-            for piece in _split_oversized_para(block.text, count_tokens, target_tokens):
-                add_piece(piece)
-        else:
-            add_piece(block.text)
+        def add_piece(piece: str) -> None:
+            nonlocal current_tokens
+            piece_tokens = count_tokens(piece)
+            if current_texts and current_tokens + piece_tokens > self._target_tokens:
+                flush(carry_overlap=True)
+            current_texts.append(piece)
+            current_tokens += piece_tokens
 
-    flush(carry_overlap=False)
-    return [c for c in chunks if c.text.strip()]
+        for kind, payload in items:
+            if kind == "heading":
+                flush(carry_overlap=False)
+                level, text = payload
+                while heading_stack and heading_stack[-1][0] >= level:
+                    heading_stack.pop()
+                heading_stack.append((level, text))
+                continue
+
+            block: _Block = payload
+            if block.kind in ("table", "code"):
+                flush(carry_overlap=False)
+                chunks.append(Chunk(text=block.text, heading_path=heading_path()))
+                continue
+
+            if count_tokens(block.text) > self._target_tokens:
+                for piece in _split_oversized_para(block.text, count_tokens, self._target_tokens):
+                    add_piece(piece)
+            else:
+                add_piece(block.text)
+
+        flush(carry_overlap=False)
+        return [c for c in chunks if c.text.strip()]
