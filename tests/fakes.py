@@ -111,6 +111,7 @@ def build_fake_container(
     ingest source."""
     from api.dependencies import Container
     from core.settings import Settings
+    from rag.factory import RagServices
     from rag.job_store import JobStore
     from rag.markdown_chunker import MarkdownChunker
     from rag.services import AnswerService, IngestService, SearchService
@@ -123,16 +124,18 @@ def build_fake_container(
     search_service = SearchService(repository, vector_store, embedder, reranker)
     return Container(
         settings=Settings(),
-        search_service=search_service,
-        answer_service=AnswerService(search_service, FakeLLMClient(response=llm_response)),
-        ingest_service=IngestService(
-            FakeDocumentSource(documents or [], error=source_error),
-            MarkdownChunker(count_tokens=embedder.count_tokens),
-            embedder,
-            repository,
-            vector_store,
+        rag=RagServices(
+            search_service=search_service,
+            answer_service=AnswerService(search_service, FakeLLMClient(response=llm_response)),
+            ingest_service=IngestService(
+                FakeDocumentSource(documents or [], error=source_error),
+                MarkdownChunker(count_tokens=embedder.count_tokens),
+                embedder,
+                repository,
+                vector_store,
+            ),
+            embedder=embedder,
+            reranker=reranker,
         ),
         job_store=JobStore(),
-        embedder=embedder,
-        reranker=reranker,
     )
