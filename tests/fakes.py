@@ -98,6 +98,58 @@ class FakeDocumentSource:
         return self.documents
 
 
+class _FakeRequest:
+    """googleapiclient builds a request object you then .execute()."""
+
+    def __init__(self, result: dict) -> None:
+        self.result = result
+
+    def execute(self) -> dict:
+        return self.result
+
+
+class FakeGmailMessages:
+    """The .users().messages() resource: list returns one page of ids, get
+    returns one raw message, exactly as Gmail does.
+
+    `listing` is the single list response ({"messages": [{"id": ...}, ...]});
+    `messages` maps message id to its get response. Records the `maxResults`
+    each list call passes so a test can assert the cap reached the API.
+    """
+
+    def __init__(self, listing: dict, messages: dict[str, dict]) -> None:
+        self.listing = listing
+        self.messages = messages
+        self.queries: list[str] = []
+        self.max_results: list[int] = []
+        self.fetched_ids: list[str] = []
+
+    def list(self, *, userId: str, q: str, maxResults: int) -> _FakeRequest:
+        self.queries.append(q)
+        self.max_results.append(maxResults)
+        return _FakeRequest(self.listing)
+
+    def get(self, *, userId: str, id: str, format: str) -> _FakeRequest:
+        self.fetched_ids.append(id)
+        return _FakeRequest(self.messages[id])
+
+
+class FakeGmailService:
+    """Stands in for the built googleapiclient Gmail resource -- the external
+    boundary. Mirrors the chained .users().messages() shape, so EmailSource's
+    own MIME walk, header lookup, cap slicing and query building all still
+    really run."""
+
+    def __init__(self, listing: dict, messages: dict[str, dict]) -> None:
+        self.resource = FakeGmailMessages(listing, messages)
+
+    def users(self) -> FakeGmailService:
+        return self
+
+    def messages(self) -> FakeGmailMessages:
+        return self.resource
+
+
 def build_fake_container(
     *,
     records: list[ChunkRecord] | None = None,

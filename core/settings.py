@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     chunk_target_tokens: int = 350
     chunk_overlap_tokens: int = 50
 
+    # Gmail OAuth (digest agent, local dev). credentials.json is the Desktop
+    # client secret; token.json is written after the first consent. On
+    # AgentCore both are replaced by the Identity token vault -- see
+    # docs/gmail-oauth-setup.md.
+    gmail_credentials_path: Path = Path("credentials.json")
+    gmail_token_path: Path = Path("token.json")
+
     # extra="ignore": the local .env also holds keys read directly by other
     # libraries (LANGFUSE_*), not by Settings.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

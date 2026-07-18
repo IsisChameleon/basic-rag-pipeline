@@ -1,6 +1,10 @@
 temp/
 data/
 .env
+# Gmail OAuth: credentials.json is the client secret, token.json the user's
+# access/refresh tokens. Both are secrets -- never commit either.
+credentials.json
+token.json
 .venv/
 __pycache__/
 *.pyc
